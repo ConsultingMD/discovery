@@ -8,6 +8,25 @@ Host information is written to and read from backend store (DynamoDB by default)
 
 Also check [requirements.txt](https://github.com/lyft/discovery/blob/master/requirements.txt) for other dependencies.
 
+## Prerequisites
+
+- Python >= 2.7
+- Pip
+- Virtualenv
+
+## Setup
+
+- Create a virtualenv: `virtualenv venv`
+- Activate it: `. venv/bin/activate`
+- Install dependencies with pip: `pip install -r requirements.txt`
+
+## Usage
+
+Running the service natively: `python wsgi.py`
+
+Building the docker image: `docker build -t discovery:latest .`
+Running the docker image: `docker run -p 10542:8080 discovery:latest`
+
 ## Discovery service settings
 Discovery service settings are controlled by [environment variables](https://github.com/lyft/discovery/blob/master/app/settings.py).
 
