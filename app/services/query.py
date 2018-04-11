@@ -6,6 +6,7 @@ import tempfile
 
 from ..stats import get_stats
 from ..models.host import Host
+from ..models.listener import Listener
 
 
 class QueryBackend(object):
@@ -64,6 +65,31 @@ class QueryBackend(object):
         pass
 
     @abc.abstractmethod
+    def get_listener(self, address):
+        """Fetches a listener by address.
+
+        :param address: the address of the host, e.g. "tcp://127.0.0.1:80"
+
+        :type address: str
+
+        :returns: a single listener if one exists, None otherwise
+        :rtype: dict
+        """
+
+        pass
+
+
+    @abc.abstractmethod
+    def get_listeners(self):
+        """Fetches all listeners.
+
+        :returns: a list of listeners
+        :rtype: list
+        """
+
+        pass
+
+    @abc.abstractmethod
     def put(self, host):
         """Attempts to store the given host
 
@@ -78,6 +104,21 @@ class QueryBackend(object):
         pass
 
     @abc.abstractmethod
+    def put_listener(self, listener):
+        """Attempts to store the given listener
+
+        :param listener: listener entry to store
+
+        :type listener: dict
+
+        :returns: True if put successful, False otherwise
+        :rtype: bool
+        """
+
+        pass
+
+
+    @abc.abstractmethod
     def delete(self, service, ip_address):
         """Deletes the given host for the given service/ip_address
 
@@ -86,6 +127,20 @@ class QueryBackend(object):
 
         :type service: str
         :type ip_address: str
+
+        :returns: True if delete successful, False otherwise
+        :rtype: bool
+        """
+
+        pass
+
+    @abc.abstractmethod
+    def delete_listener(self, address):
+        """Deletes the given listener for the given address
+
+        :param address: the address of the listener to delete
+
+        :type address: str
 
         :returns: True if delete successful, False otherwise
         :rtype: bool
@@ -154,6 +209,23 @@ class MemoryQueryBackend(QueryBackend):
         host['ip_address'] = ip_address
         return host
 
+    def get_listener(self, address):
+        listeners = self.data.get('_listeners')
+        if listeners is None:
+            return None
+
+        listener = listeners.get(address)
+        if listener is None:
+            return None
+
+        return listener
+
+    def get_listeners(self):
+        listeners = self.data.get('_listeners')
+        if listeners is None:
+            return None
+        return listeners.values()
+
     def put(self, host):
         service = host['service']
         ip_address = host['ip_address']
@@ -170,6 +242,17 @@ class MemoryQueryBackend(QueryBackend):
         ip_map[ip_address] = host_dict
         return True
 
+    def put_listener(self, listener):
+        listeners = self.data.get('_listeners')
+        if listeners is None:
+            listeners = {}
+            self.data['_listeners'] = listeners
+
+        if not (listener['address'] in listeners):
+            listeners[listener['address']] = listener
+
+        return True
+
     def delete(self, service, ip_address):
         ip_map = self.data.get(service)
         if ip_map is None:
@@ -182,6 +265,19 @@ class MemoryQueryBackend(QueryBackend):
         del ip_map[ip_address]
         if len(ip_map) == 0:
             del self.data[service]
+        return True
+
+    def delete_listener(self, address):
+        listeners = self.data.get('_listeners')
+        if listeners is None:
+            return False
+
+        if address in listeners:
+            del listeners[address]
+
+        if len(listeners) == 0:
+            del self.data['_listeners']
+
         return True
 
 
@@ -206,9 +302,21 @@ class LocalFileQueryBackend(QueryBackend):
     def get(self, service, ip_address):
         return self.backend.get(service, ip_address)
 
+    def get_listener(self, address):
+        return self.backend.get_listener(address)
+
+    def get_listeners(self):
+        return self.backend.get_listeners()
+
     def put(self, host):
         try:
             return self.backend.put(host)
+        finally:
+            self._save()
+
+    def put_listener(self, listener):
+        try:
+            return self.backend.put_listener(listener)
         finally:
             self._save()
 
@@ -218,6 +326,11 @@ class LocalFileQueryBackend(QueryBackend):
         finally:
             self._save()
 
+    def delete_listener(address):
+        try:
+            return self.backend.delete_listener(address)
+        finally:
+            self._save()
 
 class DynamoQueryBackend(QueryBackend):
     def query(self, service):
@@ -235,8 +348,29 @@ class DynamoQueryBackend(QueryBackend):
         except Host.DoesNotExist:
             return None
 
+    def get_listener(self, address):
+        try:
+            listener = Listener.get(address)
+            if listener is None:
+                return None
+            return self._pynamo_listener_to_dict(listener)
+        except Listener.DoesNotExist:
+            return None
+
+    def get_listeners(self):
+        try:
+            listeners = Listener.scan()
+            if listeners is None:
+                return None
+            return [self._pynamo_listener_to_dict(listener) for listener in listeners]
+        except Listener.DoesNotExist:
+            return None
+
     def put(self, host):
         self._dict_to_pynamo_host(host).save()
+
+    def put_listener(self, listener):
+        self._dict_to_pynamo_listener(listener).save()
 
     def batch_put(self, hosts):
         """
@@ -284,6 +418,31 @@ class DynamoQueryBackend(QueryBackend):
             statsd.incr("delete.%s" % service)
             return True
 
+    def delete_listener(self, addr):
+        """
+        Technically we should not have several entries for the given service and ip address.
+        But there is no guarantee that it must be the case. Here we verify that it's strictly
+        one registered service/ip.
+        """
+
+        statsd = get_stats('service.listener')
+        listeners = list(self._read_cursor(Listener.query(addr)))
+        if len(listeners) == 0:
+            logging.error(
+                "Delete called for nonexistent listener: addr=%s" % (addr,)
+            )
+            return False
+        elif len(listeners) > 1:
+            logging.error(
+                "Returned more than 1 result for query %s.  Aborting the delete"
+                % (addr,)
+            )
+            return False
+        else:
+            self._dict_to_pynamo_listener(listeners[0]).delete()
+            statsd.incr("delete.%s" % addr)
+            return True
+
     def _read_cursor(self, cursor):
         """Converts a pynamo cursor into a generator.
 
@@ -319,6 +478,29 @@ class DynamoQueryBackend(QueryBackend):
         _host['tags'] = host.tags
         return _host
 
+    def _pynamo_listener_to_dict(self, listener):
+        """Converts a pynamo listener into a dict.
+
+        :param listener: pynamo listener
+
+        :type listener: Listener
+
+        :returns: dictionary with listener info
+        :rtype: dict
+        """
+
+        _listener = {}
+        _listener['name'] = listener.name
+        _listener['address'] = listener.address
+        _listener['filters'] = listener.filters
+        _listener['ssl_context'] = listener.ssl_context
+        _listener['bind_to_port'] = listener.bind_to_port
+        _listener['use_proxy_proto'] = listener.use_proxy_proto
+        _listener['use_original_dst'] = listener.use_original_dst
+        _listener['per_connection_buffer_limit_bytes'] = listener.per_connection_buffer_limit_bytes
+        _listener['drain_type'] = listener.drain_type
+        return _listener
+
     def _dict_to_pynamo_host(self, host):
         """Converts a dict to a pynamo host.
 
@@ -339,3 +521,27 @@ class DynamoQueryBackend(QueryBackend):
                     revision=host['revision'],
                     last_check_in=host['last_check_in'],
                     tags=host['tags'])
+
+
+    def _dict_to_pynamo_listener(self, listener):
+        """Converts a dict to a pynamo listener.
+
+        Note that if any keys are missing, there will be an error.
+
+        :param listener: dict with listener info
+
+        :type listener: dict
+
+        :returns: pynamo Listener
+        :rtype: Listener
+        """
+
+        return Listener(name=listener['name'],
+                    address=listener['address'],
+                    filters=listener['filters'],
+                    ssl_context=listener['ssl_context'],
+                    bind_to_port=listener['bind_to_port'],
+                    use_proxy_proto=listener['use_proxy_proto'],
+                    use_original_dst=listener['use_original_dst'],
+                    per_connection_buffer_limit_bytes=listener['per_connection_buffer_limit_bytes'],
+                    drain_type=listener['drain_type'])

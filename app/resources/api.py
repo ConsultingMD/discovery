@@ -12,6 +12,7 @@ from ..stats import get_stats
 from .. import settings
 from ..services import host
 from ..services import query
+from ..services import listener
 
 logger = logging.getLogger('resources.api')
 logging.basicConfig(level=logging.DEBUG,
@@ -92,7 +93,6 @@ class HostSerializer(object):
             _host['last_check_in'] = str(_host['last_check_in'])
 
         return hosts
-
 
 class Registration(Resource):
 
@@ -208,3 +208,70 @@ class LoadBalancing(Resource):
             host_service.set_tag_all(service, 'load_balancing_weight', weight)
 
         return "", 204
+
+
+class Listener(Resource):
+    def get(self, service_cluster=None, service_node=None):
+        """Return all the listeners registered for this service"""
+
+        listener_service = listener.ListenerService(BACKEND_STORAGE)
+        listeners = listener_service.list()
+        response = {
+            'listeners': listeners
+        }
+        return response, 200
+
+    def post(self, service_cluster=None, service_node=None):
+        """Update or add a listener given the host information in this request"""
+        name = self._get_param('name', None)
+        address = self._get_param('address', None)
+        if address is None:
+            logger.exception("Address parameter is required")
+            return {"error": "Address parameter is required"}, 400
+
+        filters = self._get_param('filters', '[]')
+        try:
+            filters = json.loads(filters)
+        except ValueError as ex:
+            logger.exception("Failed to parse filters json: {}. Exception: {}".format(filters, ex))
+            return {"error": "Invalid json supplied in filters"}, 400
+
+        ssl_context = self._get_param('ssl_context', '{}')
+        try:
+            ssl_context = json.loads(ssl_context)
+        except ValueError as ex:
+            logger.exception("Failed to parse ssl_context json: {}. Exception: {}".format(ssl_context, ex))
+            return {"error": "Invalid json supplied in ssl_context"}, 400
+
+        bind_to_port = bool(self._get_param('bind_to_port', True))
+        use_proxy_proto = bool(self._get_param('use_proxy_proto', False))
+        use_original_dst = bool(self._get_param('use_original_dst', False))
+        per_connection_buffer_limit_bytes = self._get_param('per_connection_buffer_limit_bytes', None)
+        drain_type = str(self._get_param('drain_type', 'default'))
+
+        listener_service = listener.ListenerService(BACKEND_STORAGE)
+        success = listener_service.update(
+            name,
+            address,
+            filters,
+            ssl_context,
+            bind_to_port,
+            use_proxy_proto,
+            use_original_dst,
+            per_connection_buffer_limit_bytes,
+            drain_type
+        )
+
+        statsd = get_stats("listener")
+        if success:
+            response_code = 200
+            statsd.incr("listener.success")
+        else:
+            response_code = 400
+            statsd.incr("listener.failure")
+        return {}, response_code
+
+    def _get_param(self, param, default=None):
+        """Return the request parameter.  Returns default if the param was not found"""
+
+        return request.form[param] if param in request.form else default
