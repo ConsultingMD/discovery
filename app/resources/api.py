@@ -216,8 +216,11 @@ class Listener(Resource):
 
         listener_service = listener.ListenerService(BACKEND_STORAGE)
         listeners = listener_service.list()
+        cleaned_listeners = []
+        for l in listeners:
+            cleaned_listeners.append({k: v for k,v in l.iteritems() if v is not None})
         response = {
-            'listeners': listeners
+            'listeners': cleaned_listeners
         }
         return response, 200
 
@@ -236,12 +239,13 @@ class Listener(Resource):
             logger.exception("Failed to parse filters json: {}. Exception: {}".format(filters, ex))
             return {"error": "Invalid json supplied in filters"}, 400
 
-        ssl_context = self._get_param('ssl_context', '{}')
-        try:
-            ssl_context = json.loads(ssl_context)
-        except ValueError as ex:
-            logger.exception("Failed to parse ssl_context json: {}. Exception: {}".format(ssl_context, ex))
-            return {"error": "Invalid json supplied in ssl_context"}, 400
+        ssl_context = self._get_param('ssl_context', None)
+        if ssl_context is not None:
+            try:
+                ssl_context = json.loads(ssl_context)
+            except ValueError as ex:
+                logger.exception("Failed to parse ssl_context json: {}. Exception: {}".format(ssl_context, ex))
+                return {"error": "Invalid json supplied in ssl_context"}, 400
 
         bind_to_port = bool(self._get_param('bind_to_port', True))
         use_proxy_proto = bool(self._get_param('use_proxy_proto', False))

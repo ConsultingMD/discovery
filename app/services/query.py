@@ -536,12 +536,8 @@ class DynamoQueryBackend(QueryBackend):
         :rtype: Listener
         """
 
-        return Listener(name=listener['name'],
-                    address=listener['address'],
-                    filters=listener['filters'],
-                    ssl_context=listener['ssl_context'],
-                    bind_to_port=listener['bind_to_port'],
-                    use_proxy_proto=listener['use_proxy_proto'],
-                    use_original_dst=listener['use_original_dst'],
-                    per_connection_buffer_limit_bytes=listener['per_connection_buffer_limit_bytes'],
-                    drain_type=listener['drain_type'])
+        listener_attrs = listener.copy()
+        if listener_attrs['ssl_context'] is None or len(listener_attrs['ssl_context']) <= 0:
+            del listener_attrs['ssl_context']
+
+        return Listener(**listener_attrs)

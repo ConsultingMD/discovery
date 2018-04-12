@@ -35,6 +35,8 @@ class ListenerService():
             return cached_listeners
 
         listeners = self.query_backend.get_listeners()
+        if listeners is None:
+            listeners = []
 
         app.cache.set('_listeners', listeners, settings.value.CACHE_TTL)
         return listeners
