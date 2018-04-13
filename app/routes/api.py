@@ -1,5 +1,5 @@
 from .. import api
-from ..resources.api import Registration, RepoRegistration, LoadBalancing, Listener
+from ..resources.api import Registration, RepoRegistration, LoadBalancing, Listener, Cluster
 
 api.add_resource(Registration,
                  '/v1/registration/<service>',
@@ -12,4 +12,9 @@ api.add_resource(Listener,
   '/v1/listeners',
   '/v1/listeners/<service_cluster>',
   '/v1/listeners/<service_cluster>/<service_node>'
+)
+api.add_resource(Cluster,
+  '/v1/clusters',
+  '/v1/clusters/<service_cluster>',
+  '/v1/clusters/<service_cluster>/<service_node>'
 )

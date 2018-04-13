@@ -73,7 +73,7 @@ class ListenerService():
         """
 
         if not address:
-            logging.error("Update: Missing required parameter - address. url=%s params=%s")
+            logging.error("Update: Missing required parameter - address")
             return False
 
         if not filters:

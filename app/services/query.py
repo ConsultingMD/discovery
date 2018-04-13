@@ -7,6 +7,7 @@ import tempfile
 from ..stats import get_stats
 from ..models.host import Host
 from ..models.listener import Listener
+from ..models.cluster import Cluster
 
 
 class QueryBackend(object):
@@ -68,7 +69,7 @@ class QueryBackend(object):
     def get_listener(self, address):
         """Fetches a listener by address.
 
-        :param address: the address of the host, e.g. "tcp://127.0.0.1:80"
+        :param address: the address of the listener, e.g. "tcp://127.0.0.1:80"
 
         :type address: str
 
@@ -78,12 +79,35 @@ class QueryBackend(object):
 
         pass
 
-
     @abc.abstractmethod
     def get_listeners(self):
         """Fetches all listeners.
 
         :returns: a list of listeners
+        :rtype: list
+        """
+
+        pass
+
+    @abc.abstractmethod
+    def get_cluster(self, name):
+        """Fetches a cluster by name.
+
+        :param name: the name of the cluster, e.g. "jarvis"
+
+        :type name: str
+
+        :returns: a single cluster if one exists, None otherwise
+        :rtype: dict
+        """
+
+        pass
+
+    @abc.abstractmethod
+    def get_clusters(self):
+        """Fetches all clusters.
+
+        :returns: a list of clusters
         :rtype: list
         """
 
@@ -117,6 +141,19 @@ class QueryBackend(object):
 
         pass
 
+    @abc.abstractmethod
+    def put_cluster(self, cluster):
+        """Attempts to store the given cluster
+
+        :param cluster: cluster entry to store
+
+        :type cluster: dict
+
+        :returns: True if put successful, False otherwise
+        :rtype: bool
+        """
+
+        pass
 
     @abc.abstractmethod
     def delete(self, service, ip_address):
@@ -141,6 +178,20 @@ class QueryBackend(object):
         :param address: the address of the listener to delete
 
         :type address: str
+
+        :returns: True if delete successful, False otherwise
+        :rtype: bool
+        """
+
+        pass
+
+    @abc.abstractmethod
+    def delete_cluster(self, name):
+        """Deletes the given cluster for the given name
+
+        :param name: the name of the cluster to delete
+
+        :type name: str
 
         :returns: True if delete successful, False otherwise
         :rtype: bool
@@ -226,6 +277,23 @@ class MemoryQueryBackend(QueryBackend):
             return None
         return listeners.values()
 
+    def get_cluster(self, name):
+        clusters = self.data.get('_clusters')
+        if clusters is None:
+            return None
+
+        cluster = clusters.get(name)
+        if cluster is None:
+            return None
+
+        return cluster
+
+    def get_clusters(self):
+        clusters = self.data.get('_clusters')
+        if clusters is None:
+            return None
+        return clusters.values()
+
     def put(self, host):
         service = host['service']
         ip_address = host['ip_address']
@@ -253,6 +321,17 @@ class MemoryQueryBackend(QueryBackend):
 
         return True
 
+    def put_cluster(self, cluster):
+        clusters = self.data.get('_clusters')
+        if clusters is None:
+            clusters = {}
+            self.data['_clusters'] = clusters
+
+        if not (cluster['name'] in clusters):
+            clusters[cluster['name']] = cluster
+
+        return True
+
     def delete(self, service, ip_address):
         ip_map = self.data.get(service)
         if ip_map is None:
@@ -277,6 +356,19 @@ class MemoryQueryBackend(QueryBackend):
 
         if len(listeners) == 0:
             del self.data['_listeners']
+
+        return True
+
+    def delete_cluster(self, name):
+        clusters = self.data.get('_clusters')
+        if clusters is None:
+            return False
+
+        if name in clusters:
+            del clusters[name]
+
+        if len(clusters) == 0:
+            del self.data['_clusters']
 
         return True
 
@@ -308,6 +400,12 @@ class LocalFileQueryBackend(QueryBackend):
     def get_listeners(self):
         return self.backend.get_listeners()
 
+    def get_cluster(self, name):
+        return self.backend.get_cluster(name)
+
+    def get_clusters(self):
+        return self.backend.get_clusters()
+
     def put(self, host):
         try:
             return self.backend.put(host)
@@ -320,6 +418,12 @@ class LocalFileQueryBackend(QueryBackend):
         finally:
             self._save()
 
+    def put_cluster(self, cluster):
+        try:
+            return self.backend.put_cluster(cluster)
+        finally:
+            self._save()
+
     def delete(self, service, ip_address):
         try:
             return self.backend.delete(service, ip_address)
@@ -329,6 +433,12 @@ class LocalFileQueryBackend(QueryBackend):
     def delete_listener(address):
         try:
             return self.backend.delete_listener(address)
+        finally:
+            self._save()
+
+    def delete_cluster(name):
+        try:
+            return self.backend.delete_cluster(name)
         finally:
             self._save()
 
@@ -366,11 +476,32 @@ class DynamoQueryBackend(QueryBackend):
         except Listener.DoesNotExist:
             return None
 
+    def get_cluster(self, name):
+        try:
+            cluster = Cluster.get(name)
+            if cluster is None:
+                return None
+            return self._pynamo_cluster_to_dict(cluster)
+        except Cluster.DoesNotExist:
+            return None
+
+    def get_clusters(self):
+        try:
+            clusters = Cluster.scan()
+            if clusters is None:
+                return None
+            return [self._pynamo_cluster_to_dict(cluster) for cluster in clusters]
+        except Cluster.DoesNotExist:
+            return None
+
     def put(self, host):
         self._dict_to_pynamo_host(host).save()
 
     def put_listener(self, listener):
         self._dict_to_pynamo_listener(listener).save()
+
+    def put_cluster(self, cluster):
+        self._dict_to_pynamo_cluster(cluster).save()
 
     def batch_put(self, hosts):
         """
@@ -443,6 +574,31 @@ class DynamoQueryBackend(QueryBackend):
             statsd.incr("delete.%s" % addr)
             return True
 
+    def delete_cluster(self, name):
+        """
+        Technically we should not have several entries for the given service and ip address.
+        But there is no guarantee that it must be the case. Here we verify that it's strictly
+        one registered service/ip.
+        """
+
+        statsd = get_stats('service.cluster')
+        clusters = list(self._read_cursor(Listener.query(name)))
+        if len(clusters) == 0:
+            logging.error(
+                "Delete called for nonexistent cluster: name=%s" % (name,)
+            )
+            return False
+        elif len(clusters) > 1:
+            logging.error(
+                "Returned more than 1 result for query %s.  Aborting the delete"
+                % (name,)
+            )
+            return False
+        else:
+            self._dict_to_pynamo_cluster(clusters[0]).delete()
+            statsd.incr("delete.%s" % name)
+            return True
+
     def _read_cursor(self, cursor):
         """Converts a pynamo cursor into a generator.
 
@@ -501,6 +657,41 @@ class DynamoQueryBackend(QueryBackend):
         _listener['drain_type'] = listener.drain_type
         return _listener
 
+    def _pynamo_cluster_to_dict(self, cluster):
+        """Converts a pynamo cluster into a dict.
+
+        :param cluster: pynamo cluster
+
+        :type cluster: Cluster
+
+        :returns: dictionary with cluster info
+        :rtype: dict
+        """
+
+        _cluster = {}
+
+        _cluster['name'] = cluster.name
+        _cluster['sd_type'] = cluster.sd_type
+        _cluster['connect_timeout_ms'] = cluster.connect_timeout_ms
+        _cluster['per_connection_buffer_limit_bytes'] = cluster.per_connection_buffer_limit_bytes
+        _cluster['lb_type'] = cluster.lb_type
+        _cluster['ring_hash_lb_config'] = cluster.ring_hash_lb_config
+        _cluster['hosts'] = cluster.hosts
+        _cluster['service_name'] = cluster.service_name
+        _cluster['health_check'] = cluster.health_check
+        _cluster['max_requests_per_connection'] = cluster.max_requests_per_connection
+        _cluster['circuit_breakers'] = cluster.circuit_breakers
+        _cluster['ssl_context'] = cluster.ssl_context
+        _cluster['features'] = cluster.features
+        _cluster['http2_settings'] = cluster.http2_settings
+        _cluster['cleanup_interval_ms'] = cluster.cleanup_interval_ms
+        _cluster['dns_refresh_rate_ms'] = cluster.dns_refresh_rate_ms
+        _cluster['dns_lookup_family'] = cluster.dns_lookup_family
+        _cluster['dns_resolvers'] = cluster.dns_resolvers
+        _cluster['outlier_detection'] = cluster.outlier_detection
+
+        return _cluster
+
     def _dict_to_pynamo_host(self, host):
         """Converts a dict to a pynamo host.
 
@@ -537,7 +728,20 @@ class DynamoQueryBackend(QueryBackend):
         """
 
         listener_attrs = listener.copy()
-        if listener_attrs['ssl_context'] is None or len(listener_attrs['ssl_context']) <= 0:
-            del listener_attrs['ssl_context']
-
         return Listener(**listener_attrs)
+
+    def _dict_to_pynamo_cluster(self, cluster):
+        """Converts a dict to a pynamo cluster.
+
+        Note that if any keys are missing, there will be an error.
+
+        :param cluster: dict with cluster info
+
+        :type cluster: dict
+
+        :returns: pynamo Cluster
+        :rtype: Cluster
+        """
+
+        cluster_attrs = cluster.copy()
+        return Cluster(**cluster_attrs)
