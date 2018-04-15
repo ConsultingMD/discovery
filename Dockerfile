@@ -7,4 +7,7 @@ COPY . /etc/discovery
 
 RUN cd /etc/discovery && virtualenv venv && . venv/bin/activate && pip install -r requirements.txt
 
+ENV BACKEND_STORAGE InFile
+ENV HOST_TTL -1
+
 CMD cd /etc/discovery && . venv/bin/activate && python wsgi.py

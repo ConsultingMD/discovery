@@ -248,6 +248,9 @@ class HostService():
         :rtype: bool
         """
 
+        if settings.value.HOST_TTL < 0:
+            return False
+
         last_check_in = host['last_check_in']
         now = pytz.utc.localize(datetime.datetime.utcnow())
 
