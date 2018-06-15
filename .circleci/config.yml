@@ -65,8 +65,8 @@ jobs:
           name: Install dependencies
           command: |
             sudo apt-get install build-essential jq
-            pip install awscli
-            pip install docker-compose
+            sudo pip install awscli
+            sudo pip install docker-compose
 
       - run:
           name: build docker image
