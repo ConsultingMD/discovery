@@ -23,11 +23,12 @@ jobs:
       # Download and cache dependencies
       - restore_cache:
           keys:
-          - v1-discovery-dependencies-{{ checksum "environment.yaml" }}
+          - v1-discovery-dependencies-{{ checksum "requirements.txt" }}
 
       - run:
           name: install dependencies
           command: |
+            pip install virtualenv
             virtualenv venv
             . venv/bin/activate
             pip install -r requirements.txt
@@ -35,7 +36,7 @@ jobs:
       - save_cache:
           paths:
             - ~/venv
-          key: v1-discovery-dependencies-{{ checksum "environment.yaml" }}
+          key: v1-discovery-dependencies-{{ checksum "requirements.txt" }}
 
       # run tests!
       # this example uses Django's built-in test-runner
