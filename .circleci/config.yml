@@ -28,7 +28,7 @@ jobs:
       - run:
           name: install dependencies
           command: |
-            pip install virtualenv
+            sudo pip install virtualenv
             virtualenv venv
             . venv/bin/activate
             pip install -r requirements.txt
@@ -64,7 +64,7 @@ jobs:
       - run:
           name: Install dependencies
           command: |
-            apk add --no-cache py2-pip jq
+            sudo apt-get install build-essential jq
             pip install awscli
             pip install docker-compose
 
