@@ -102,9 +102,9 @@ jobs:
             $(aws ecr get-login --no-include-email --region us-east-1)
             if [[ $SHA_IMAGES == "[]" ]]; then
               echo 'Pushing image to ECR'
-              docker tag docker_web:latest "${ECR_ENDPOINT}/discovery:${CIRCLE_SHA1}"
+              docker tag discovery:latest "${ECR_ENDPOINT}/discovery:${CIRCLE_SHA1}"
               docker push "${ECR_ENDPOINT}/discovery:${CIRCLE_SHA1}"
-              docker tag docker_web:latest "${ECR_ENDPOINT}/discovery:${FORMATTED_BRANCH}"
+              docker tag discovery:latest "${ECR_ENDPOINT}/discovery:${FORMATTED_BRANCH}"
               docker push "${ECR_ENDPOINT}/discovery:${FORMATTED_BRANCH}"
             else
               export MANIFEST=$(aws ecr batch-get-image --repository-name discovery --image-ids imageTag=${CIRCLE_SHA1} --query images[].imageManifest --output text)
