@@ -77,7 +77,7 @@ jobs:
             aws ecr describe-images --repository-name discovery | jq "[.imageDetails[] | select(.imageTags[]? | contains (\"${CIRCLE_SHA1}\"))]" > sha_images
             export SHA_IMAGES=$(cat sha_images)
             if [[ $SHA_IMAGES == "[]" ]]; then
-              sh ./docker/build_docker_image.sh
+              docker build -t discovery:latest .
             fi
 
       - run:
