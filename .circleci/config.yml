@@ -1,0 +1,77 @@
+# Python CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-python/ for more details
+#
+version: 2
+jobs:
+  build:
+    working_directory: ~/repo
+    docker:
+      - image: circleci/python:3.6.1
+    steps:
+      - checkout
+
+      - setup_remote_docker:
+          docker_layer_caching: true
+
+      - run:
+          name: Install dependencies
+          command: |
+            sudo apt-get install build-essential jq
+            sudo pip install awscli
+            sudo pip install docker-compose
+
+      - run:
+          name: build docker image
+          # if ECR does not contain an image with the sha
+          # build the image
+          command: |
+            $(aws ecr get-login --no-include-email --region us-east-1)
+            aws ecr describe-images --repository-name discovery | jq "[.imageDetails[] | select(.imageTags[]? | contains (\"${CIRCLE_SHA1}\"))]" > sha_images
+            export SHA_IMAGES=$(cat sha_images)
+            if [[ $SHA_IMAGES == "[]" ]]; then
+              docker build -t discovery:latest .
+            fi
+
+      - run:
+          name: fetch pre-existing docker images
+          # Only delete the old image if the image has less than 3 tags
+          command: |
+            export FORMATTED_BRANCH=${CIRCLE_BRANCH//\//_}
+            export SHA_IMAGES=$(cat sha_images | jq "[.[] | {imageDigest: .imageDigest}]")
+            $(aws ecr get-login --no-include-email --region us-east-1)
+            export NUMBER_OF_TAGS=$(aws ecr describe-images --repository-name discovery | jq ".imageDetails[] | select(.imageTags[]? | contains (\"$FORMATTED_BRANCH\")) | .imageTags | length")
+            if [[ $NUMBER_OF_TAGS -lt 3 ]]; then
+              aws ecr describe-images --repository-name discovery | jq "[.imageDetails[] | select(.imageTags[]? | contains (\"$FORMATTED_BRANCH\")) | {imageDigest: .imageDigest}] | . - $SHA_IMAGES" > old_images
+            fi
+
+      - deploy:
+          name: push docker image
+          # if ECR does not contain the image with the sha, build the image
+          # else add a tag to the image in ECR
+          command: |
+            export SHA_IMAGES=$(cat sha_images)
+            export FORMATTED_BRANCH=${CIRCLE_BRANCH//\//_}
+            $(aws ecr get-login --no-include-email --region us-east-1)
+            if [[ $SHA_IMAGES == "[]" ]]; then
+              echo 'Pushing image to ECR'
+              docker tag discovery:latest "${ECR_ENDPOINT}/discovery:${CIRCLE_SHA1}"
+              docker push "${ECR_ENDPOINT}/discovery:${CIRCLE_SHA1}"
+              docker tag discovery:latest "${ECR_ENDPOINT}/discovery:${FORMATTED_BRANCH}"
+              docker push "${ECR_ENDPOINT}/discovery:${FORMATTED_BRANCH}"
+            else
+              export MANIFEST=$(aws ecr batch-get-image --repository-name discovery --image-ids imageTag=${CIRCLE_SHA1} --query images[].imageManifest --output text)
+              aws ecr put-image --repository-name discovery --image-tag "${FORMATTED_BRANCH}" --image-manifest "${MANIFEST}"
+            fi
+
+      - run:
+          name: delete pre-existing docker images
+          command: |
+            if [[ -f old_images ]]; then
+              $(aws ecr get-login --no-include-email --region us-east-1)
+              export OLD_IMAGES=$(cat old_images)
+              echo "Deleting old images ${OLD_IMAGES}"
+              if [[ "$OLD_IMAGES" != "[]" ]]; then
+                aws ecr batch-delete-image --repository-name discovery --image-ids "${OLD_IMAGES}"
+              fi
+            fi
